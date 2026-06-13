@@ -1,0 +1,1024 @@
+package com.diary;
+
+import javax.swing.*;
+import javax.swing.table.*;
+import java.awt.*;
+import java.awt.event.*;
+import java.time.LocalDate;
+import java.util.*;
+import java.util.List;
+
+public class DiaryMain extends JFrame {
+	public static final Color COLOR_PRIMARY = new Color(70, 130, 180), COLOR_SECONDARY = new Color(200, 220, 240),
+			COLOR_BG_LIGHT = new Color(245, 248, 252), COLOR_DIARY_EXIST = new Color(215, 235, 255),
+			COLOR_TODAY_PURPLE = new Color(110, 190, 245);
+	public static final Font FONT_MAIN = new Font(null, 0, 13), FONT_BOLD = new Font(null, 1, 15),
+			FONT_SMALL = new Font(null, 0, 11), FONT_TITLE = new Font(null, 1, 22);
+	public static final String[] MOOD_ITEMS = { "선택 안함", "😊 기쁨", "😴 피곤", "😥 우울", "😡 화남" };
+
+	private final int YEAR = 2026;
+	private int currentMonth;
+	private final UserVO currentUser;
+	private final DiaryDAO diaryDAO = new DiaryDAOImple();
+	private JLabel monthLabel;
+	private JTable calendarTable, diaryListTable, doneTable;
+	private DefaultTableModel calendarModel, diaryListModel, doneModel;
+
+	// DB에서 데이터를 가져와 doneTable(JTable) 모델에 채우는 메서드
+	public void loadDoneListFromDB() {
+		// 1. DB에서 리스트 가져오기
+		List<DoneVO> list = diaryDAO.getDoneList(currentUser.getUserId());
+
+		// 2. 현재 화면의 모델(doneModel) 비우기
+		doneModel.setRowCount(0);
+
+		// 3. DB 데이터를 테이블에 한 줄씩 다시 추가
+		for (DoneVO vo : list) {
+			doneModel.addRow(new Object[] { vo.isDone(), // 0번 칸: 완료 여부 (체크박스)
+					vo.getDoneDate(), // 1번 칸: 날짜
+					vo.getContent(), // 2번 칸: 할 일 내용
+					"삭제", // 3번 칸: 삭제 버튼
+					vo.getDoneId() // 4번 칸 (숨겨짐): DB 고유 ID ★이게 무조건 맨 끝에 와야 함!
+			}); // doneModel.addRow문 끝
+		} // for문 끝
+	} // loadDoneListFromDB() 끝
+
+	public DiaryMain(UserVO user) {
+		this.currentUser = user;
+		this.currentMonth = Calendar.getInstance().get(Calendar.MONTH);
+		setTitle("개인 다이어리 시스템 - " + user.getUsername() + "님");
+		setSize(1250, 750);
+		setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		setLocationRelativeTo(null);
+
+		initUI();
+		loadDoneListFromDB(); // 1. DB에서 할 일 목록을 먼저 가져와 모델을 채웁니다.
+		refreshCalendar(); // 2. 채워진 데이터를 바탕으로 캘린더를 그립니다 (+n 표시).
+		refreshDiaryList(); // 3. 일기 목록을 갱신합니다.
+	} // DiaryMain 끝
+
+	private void initUI() {
+		JPanel northPanel = new JPanel(new BorderLayout());
+		northPanel.setBackground(COLOR_PRIMARY);
+		northPanel.setBorder(BorderFactory.createEmptyBorder(15, 20, 15, 20));
+		JLabel titleLabel = new JLabel("My Memory & Done Log (2026)", JLabel.LEFT);
+		titleLabel.setFont(FONT_TITLE);
+		titleLabel.setForeground(Color.WHITE);
+		northPanel.add(titleLabel, BorderLayout.WEST);
+
+		JPanel userPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 12, 5));
+		userPanel.setOpaque(false);
+		JLabel welcomeLabel = new JLabel(currentUser.getUsername() + "님 접속 중", JLabel.RIGHT);
+		welcomeLabel.setFont(FONT_BOLD);
+		welcomeLabel.setForeground(Color.WHITE);
+
+		JButton allListBtn = new JButton("전체 일기 모아보기");
+		allListBtn.setFont(FONT_MAIN);
+		allListBtn.addActionListener(e -> new DiaryListDialog(this, diaryDAO, currentUser).setVisible(true));
+		JButton logoutBtn = new JButton("로그아웃");
+		logoutBtn.setFont(FONT_MAIN);
+		logoutBtn.addActionListener(e -> {
+			new LoginFrame().setVisible(true);
+			dispose();
+		}); // logoutBtn.addActionListener 끝
+		JButton exitBtn = new JButton("종료");
+		exitBtn.setFont(FONT_MAIN);
+		exitBtn.setBackground(new Color(230, 90, 90));
+		exitBtn.setForeground(Color.WHITE);
+		exitBtn.addActionListener(e -> {
+			if (JOptionPane.showConfirmDialog(this, "프로그램을 완전히 종료하시겠습니까?", "종료 확인", 0) == 0)
+				System.exit(0);
+		}); // exitBtn.addActionListener 끝
+
+		userPanel.add(welcomeLabel);
+		userPanel.add(allListBtn);
+		userPanel.add(logoutBtn);
+		userPanel.add(exitBtn);
+		northPanel.add(userPanel, BorderLayout.EAST);
+
+		JPanel centerPanel = new JPanel(new GridBagLayout());
+		centerPanel.setBackground(Color.WHITE);
+		GridBagConstraints gbc = new GridBagConstraints();
+		gbc.fill = GridBagConstraints.BOTH;
+		gbc.weighty = 1.0;
+		gbc.gridx = 0;
+		gbc.gridy = 0;
+		gbc.weightx = 0.45;
+		gbc.insets = new Insets(15, 15, 15, 10);
+		centerPanel.add(createLeftCalendarPanel(), gbc);
+		gbc.gridx = 1;
+		gbc.gridy = 0;
+		gbc.weightx = 0.55;
+		gbc.insets = new Insets(15, 10, 15, 15);
+		centerPanel.add(createRightManagementPanel(), gbc);
+
+		add(northPanel, BorderLayout.NORTH);
+		add(centerPanel, BorderLayout.CENTER);
+	} // initUI() 끝
+
+	private JPanel createLeftCalendarPanel() {
+		JPanel panel = new JPanel(new BorderLayout(0, 10));
+		panel.setOpaque(false);
+		panel.setBorder(BorderFactory.createTitledBorder(BorderFactory.createLineBorder(COLOR_SECONDARY, 1), "월간 캘린더",
+				0, 0, FONT_BOLD));
+		JPanel ctrlPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 20, 5));
+		ctrlPanel.setOpaque(false);
+		JButton prevBtn = new JButton("◀"), nextBtn = new JButton("▶");
+		monthLabel = new JLabel("", JLabel.CENTER);
+		monthLabel.setFont(FONT_BOLD);
+		prevBtn.addActionListener(e -> moveMonth(-1));
+		nextBtn.addActionListener(e -> moveMonth(1));
+		ctrlPanel.add(prevBtn);
+		ctrlPanel.add(monthLabel);
+		ctrlPanel.add(nextBtn);
+		panel.add(ctrlPanel, BorderLayout.NORTH);
+
+		calendarModel = new DefaultTableModel(new String[] { "일", "월", "화", "수", "목", "금", "토" }, 0) {
+			@Override
+			public boolean isCellEditable(int r, int c) {
+				return false;
+			} // isCellEditable 끝
+		}; // DefaultTableModel 끝
+		calendarTable = new JTable(calendarModel);
+		calendarTable.setRowHeight(75);
+		calendarTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+		calendarTable.setCellSelectionEnabled(true);
+		calendarTable.getTableHeader().setReorderingAllowed(false);
+		calendarTable.getTableHeader().setFont(FONT_BOLD);
+		calendarTable.getTableHeader().setBackground(COLOR_SECONDARY);
+
+		calendarTable.setDefaultRenderer(Object.class, new TableCellRenderer() {
+			private final JTextPane tp = new JTextPane();
+			{
+				tp.setContentType("text/html");
+				tp.setEditable(false);
+				tp.setOpaque(true);
+				tp.setMargin(new Insets(5, 4, 5, 4));
+			} // JTextPane tp 끝
+
+			@Override
+			public Component getTableCellRendererComponent(JTable t, Object v, boolean s, boolean h, int r, int c) {
+				if (v == null || v.toString().trim().isEmpty()) {
+					tp.setText("");
+					tp.setBackground(Color.WHITE);
+					return tp;
+				} // if문 1 끝
+				
+				String cleanNum = v.toString().replaceAll("<[^>]*>", "").trim().split(" ")[0];
+				int day = Integer.parseInt(cleanNum.replaceAll("[^0-9]", ""));
+				LocalDate cd = LocalDate.of(YEAR, currentMonth + 1, day), today = LocalDate.now();
+				
+				if (cd.isAfter(today)) {
+					tp.setBackground(new Color(240, 240, 240));
+					tp.setText(
+							"<html><span style='font-family:sans-serif;font-size:11px;color:#B0B0B0;white-space:nowrap;'>"
+									+ cleanNum + "</span></html>");
+					return tp;
+				} // if문 2 끝
+
+				String tc = s ? "#FFFFFF" : (c == 0 ? "#FF0000" : (c == 6 ? "#0000FF" : "#194B8C"));
+				List<String> mDates = diaryDAO.getMarkedDates(currentUser.getUserId());
+				boolean isExist = mDates != null
+						&& mDates.contains(String.format("%04d-%02d-%02d", YEAR, currentMonth + 1, day)),
+						isToday = cd.equals(today);
+				tp.setBackground(s ? t.getSelectionBackground()
+						: (isToday ? COLOR_TODAY_PURPLE : (isExist ? COLOR_DIARY_EXIST : Color.WHITE)));
+				String fw = (isExist || isToday) ? "bold" : "normal";
+				String inner = v.toString().startsWith("<html>")
+						? v.toString().replaceAll("<html>|</html>|<span[^>]*>|</span>", "")
+						: String.valueOf(day);
+				tp.setText(
+						"<html><body style='margin:0;padding:0;'><span style='font-family:sans-serif;font-size:11px;white-space:nowrap;color:"
+								+ tc + ";font-weight:" + fw + ";'>" + inner + "</span></body></html>");
+				return tp;
+			} // getTableCellRendererComponent override 끝
+		}); // calendarTable.setDefaultRenderer 끝
+
+		calendarTable.addMouseListener(new MouseAdapter() {
+			@Override
+			public void mouseClicked(MouseEvent e) {
+				int r = calendarTable.getSelectedRow(), c = calendarTable.getSelectedColumn();
+				if (r != -1 && c != -1 && calendarTable.getValueAt(r, c) != null
+						&& !calendarTable.getValueAt(r, c).toString().trim().isEmpty())
+					handleDateClick(Integer.parseInt(
+							calendarTable.getValueAt(r, c).toString().replaceAll("<[^>]*>", "").trim().split(" ")[0]
+									.replaceAll("[^0-9]", "")));
+			} // mouseClicked 끝
+		}); // calendarTable.addMouseListener 끝
+		panel.add(new JScrollPane(calendarTable), BorderLayout.CENTER);
+		return panel;
+	} // createLeftCalendarPanel() 끝
+
+	private JTabbedPane createRightManagementPanel() {
+		JTabbedPane tp = new JTabbedPane();
+		tp.setFont(FONT_BOLD);
+		diaryListModel = new DefaultTableModel(new String[] { "번호", "날짜", "제목", "기분 배지", "최종 수정시각" }, 0) {
+			@Override
+			public boolean isCellEditable(int r, int c) {
+				return false;
+			} // isCellEditable 끝
+		}; // diaryListModel = new DefaultTableModel 끝
+		diaryListTable = new JTable(diaryListModel);
+		setupTableStyle(diaryListTable, new int[] { 45, 90, 180, 85, 130 });
+		diaryListTable.addMouseListener(new MouseAdapter() {
+			@Override
+			public void mouseClicked(MouseEvent e) {
+				if (e.getClickCount() == 2 && diaryListTable.getSelectedRow() != -1
+						&& !"-".equals(diaryListTable.getValueAt(diaryListTable.getSelectedRow(), 1)))
+					openDiaryDetailOrForm((String) diaryListTable.getValueAt(diaryListTable.getSelectedRow(), 1));
+			} // mouseClicked 끝
+		}); // diaryListTable.addMouseListener 끝
+
+		// [1] 모델 정의 (수정 버튼 제거, 총 5개 컬럼)
+		doneModel = new DefaultTableModel(new String[] { "완료", "날짜", "할 일 내용", "삭제", "ID" }, 0) {
+			@Override
+			public Class<?> getColumnClass(int c) {
+				return c == 0 ? Boolean.class : String.class;
+			} // getColumnClass 끝
+
+			@Override
+			public boolean isCellEditable(int r, int c) {
+				// 0:완료체크, 2:내용 텍스트, 3:삭제버튼
+				return c == 0 || c == 2 || c == 3;
+			} // isCellEditable 끝
+		}; // doneModel = new DefaultTableModel 끝
+		doneTable = new JTable(doneModel);
+
+		// [2] 테이블 너비 세팅 (수정 버튼이 빠진 만큼 '할 일 내용'을 300으로 늘림)
+		setupTableStyle(doneTable, new int[] { 45, 90, 300, 60, 0 });
+
+		TableCellRenderer doneRen = (t, v, s, h, r, c) -> {
+			JLabel l = new JLabel();
+			l.setFont(t.getFont());
+			l.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
+			Boolean isDone = (Boolean) t.getValueAt(r, 0);
+			String text = v != null ? v.toString() : "";
+			l.setText((isDone != null && isDone) ? "<html><s><font color='gray'>" + text + "</font></s></html>" : text);
+			if (s) {
+				l.setBackground(t.getSelectionBackground());
+				l.setOpaque(true);
+			} // if문 끝
+			return l;
+		}; // doneRen 끝
+
+		// [3] 인덱스가 당겨졌으므로 이제 4번(ID)을 숨김 처리
+		doneTable.getColumnModel().getColumn(4).setMinWidth(0);
+		doneTable.getColumnModel().getColumn(4).setMaxWidth(0);
+		doneTable.getColumnModel().getColumn(4).setWidth(0);
+
+		// [4] 삭제 버튼 렌더러를 3번 컬럼에 매핑 (수정 버튼 렌더러는 삭제)
+		doneTable.getColumnModel().getColumn(1).setCellRenderer(doneRen);
+		doneTable.getColumnModel().getColumn(2).setCellRenderer(doneRen);
+		doneTable.getColumnModel().getColumn(3).setCellRenderer(new ButtonCellEditorRenderer("삭제", false, this));
+		doneTable.getColumnModel().getColumn(3).setCellEditor(new ButtonCellEditorRenderer("삭제", false, this));
+		// 2. createRightManagementPanel() 안의 doneModel.addTableModelListener 수정
+		doneModel.addTableModelListener(e -> {
+			// 💡 [핵심 해결 방법] 행이 단순히 추가(INSERT)될 때는 무시하고, 수동으로 수정(UPDATE)될 때만 작동하게 만듭니다.
+			if (e.getType() != javax.swing.event.TableModelEvent.UPDATE)
+				return;
+
+			doneTable.repaint();
+
+			int row = e.getFirstRow();
+			int col = e.getColumn();
+
+			if (row >= 0 && row < doneModel.getRowCount()) {
+				// 체크박스(0번 열)나 할 일 내용(2번 열)이 수정된 경우에만 DB 작업 수행
+				if (col == 0 || col == 2) {
+					Object idObj = doneModel.getValueAt(row, 4);
+
+					// 💡 [안전 장치] 데이터가 없는 빈칸 처리용 "-" (String)인 경우 변환하지 않고 스킵하여 에러 방지
+					if (idObj instanceof String)
+						return;
+
+					int doneId = (Integer) idObj; // 이제 안전하게 숫자로 변환 가능
+
+					if (col == 0) {
+						boolean isDone = (Boolean) doneModel.getValueAt(row, 0);
+						diaryDAO.updateDoneStatus(doneId, isDone);
+						refreshCalendar();
+					} else if (col == 2) {
+						String newContent = (String) doneModel.getValueAt(row, 2);
+						diaryDAO.updateDoneContent(doneId, newContent);
+					} // if-else if문 1-2 끝
+				} // if문 1-1 끝
+			} // if문 1 끝
+		}); // doneModel.addTableModelListener 끝
+
+		JPanel doneTabPanel = new JPanel(new BorderLayout());
+		JLabel guideLabel = new JLabel("💡 팁: '할 일 내용' 칸을 더블클릭하면 텍스트를 바로 수정할 수 있습니다.", JLabel.LEFT);
+		guideLabel.setFont(FONT_SMALL);
+		guideLabel.setForeground(Color.GRAY);
+		guideLabel.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
+
+		doneTabPanel.add(guideLabel, BorderLayout.NORTH);
+		doneTabPanel.add(new JScrollPane(doneTable), BorderLayout.CENTER);
+
+		tp.addTab("일기장 타임라인 목록", new JScrollPane(diaryListTable));
+		tp.addTab("종합 Done-List 모아보기", doneTabPanel); // 래핑된 패널로 추가
+
+		return tp;
+	} // createRightManagementPanel() 끝
+
+	private void setupTableStyle(JTable t, int[] w) {
+		t.setFont(FONT_MAIN);
+		t.setRowHeight(42);
+		t.getTableHeader().setReorderingAllowed(false);
+		t.getTableHeader().setBackground(COLOR_BG_LIGHT);
+		t.getTableHeader().setFont(FONT_BOLD);
+		SmartCellRenderer cr = new SmartCellRenderer();
+		for (int i = 0; i < t.getColumnCount(); i++) {
+			t.getColumnModel().getColumn(i).setPreferredWidth(w[i]);
+			if (i > 0 && t.getColumnModel().getColumn(i).getCellRenderer() == null)
+				t.getColumnModel().getColumn(i).setCellRenderer(cr);
+		} // for문 끝
+	} // setupTableStyle 끝
+
+	private void moveMonth(int a) {
+		if (currentMonth + a < 0 || currentMonth + a > 11) {
+			JOptionPane.showMessageDialog(this, "2026년도 내에서만 이동할 수 있습니다.", "안내", 1);
+			return;
+		} // if문 끝
+		currentMonth += a;
+		refreshCalendar();
+	} // moveMonth 끝
+
+	public void refreshDiaryList() {
+		diaryListModel.setRowCount(0);
+		List<DiaryVO> list = diaryDAO.getDiaryList(currentUser.getUserId());
+		if (list == null || list.isEmpty()) {
+			diaryListModel.addRow(new Object[] { "-", "-", "", "-", "-" });
+			return;
+		} // if문 끝
+		list.sort(Comparator.comparing(DiaryVO::getDiaryDate));
+		int rn = 1;
+		for (DiaryVO d : list)
+			diaryListModel
+					.addRow(new Object[] { rn++, d.getDiaryDate(), d.getTitle(),
+							(d.getMoodId() >= 1 && d.getMoodId() < MOOD_ITEMS.length) ? MOOD_ITEMS[d.getMoodId()]
+									: MOOD_ITEMS[0],
+							d.getUpdatedAt() != null ? d.getUpdatedAt().replace(" ", "\n") : "기록없음" });
+		// d.getUpdatedAt()이 null인 상태
+	} // refreshDiaryList() 끝
+
+	public void refreshCalendar() {
+		calendarModel.setRowCount(0);
+		monthLabel.setText(YEAR + "년 " + (currentMonth + 1) + "월");
+		List<String> mDates = diaryDAO.getMarkedDates(currentUser.getUserId());
+		Calendar cal = Calendar.getInstance();
+		cal.set(YEAR, currentMonth, 1);
+		int sDay = cal.get(Calendar.DAY_OF_WEEK) - 1, mDay = cal.getActualMaximum(Calendar.DAY_OF_MONTH), cIdx = sDay;
+		Object[] row = new Object[7];
+		
+		for (int i = 0; i < sDay; i++)
+			row[i] = "";
+		
+		for (int d = 1; d <= mDay; d++) {
+			String ds = String.format("%04d-%02d-%02d", YEAR, currentMonth + 1, d);
+			int dc = getDoneCountByDate(ds);
+			String db = dc > 0 ? " <font color='#4A6999'><u>+" + dc + "</u></font>" : "", mi = "";
+			if (mDates != null && mDates.contains(ds)) {
+				DiaryVO dv = diaryDAO.getDiaryByDate(currentUser.getUserId(), ds);
+				if (dv != null && dv.getMoodId() >= 1 && dv.getMoodId() < MOOD_ITEMS.length)
+					mi = " " + MOOD_ITEMS[dv.getMoodId()].split(" ")[0];
+			} // if문 1 끝
+			row[cIdx++] = (!mi.isEmpty() || !db.isEmpty())
+					? "<html><span style='white-space: nowrap;'>" + d + mi + db + "</span></html>"
+					: String.valueOf(d);
+			if (cIdx == 7) {
+				calendarModel.addRow(row);
+				row = new Object[7];
+				cIdx = 0;
+			} // if문 2 끝
+		} // for문 끝
+		if (cIdx > 0) {
+			for (int i = cIdx; i < 7; i++)
+				row[i] = "";
+			calendarModel.addRow(row);
+		} // if문 3 끝
+	} // refreshCalendar() 끝
+
+	private int getDoneCountByDate(String dStr) {
+		if (doneModel == null)
+			return 0;
+		int c = 0;
+		for (int i = 0; i < doneModel.getRowCount(); i++)
+			if (dStr.equals(doneModel.getValueAt(i, 1))
+					&& (doneModel.getValueAt(i, 0) == null || !(Boolean) doneModel.getValueAt(i, 0)))
+				c++;
+		return c;
+	} // getDoneCountByDate 끝
+
+	@SuppressWarnings("unchecked")
+	public void refreshDoneList() {
+		if (doneModel == null)
+			return;
+		List<Vector> vRows = new ArrayList<>();
+		for (Vector r : doneModel.getDataVector())
+			if (r.size() > 1 && !"-".equals(r.get(1)))
+				vRows.add(r);
+		vRows.sort((r1, r2) -> ((String) r1.get(1)).compareTo((String) r2.get(1)));
+		doneModel.setRowCount(0);
+		if (vRows.isEmpty())
+			doneModel.addRow(new Object[] { false, "-", "기록된 할 일이 없습니다.", "삭제", "-" });
+		else
+			for (Vector r : vRows)
+				doneModel.addRow(r);
+	} // refreshDoneList() 끝
+
+	public DefaultTableModel getDoneModel() {
+		return this.doneModel;
+	} // DefaultTableModel getDoneModel() 끝
+
+	private void handleDateClick(int day) {
+		LocalDate sd = LocalDate.of(YEAR, currentMonth + 1, day);
+		if (sd.isAfter(LocalDate.now())) {
+			JOptionPane.showMessageDialog(this, "미래의 날짜에는 일기를 작성할 수 없습니다.", "날짜 제한 에러", 0);
+			return;
+		} // if문 끝
+		openDiaryDetailOrForm(sd.toString());
+	} // handleDateClick 끝
+
+	public void openDiaryDetailOrForm(String dStr) {
+		DiaryVO diary = diaryDAO.getDiaryByDate(currentUser.getUserId(), dStr);
+		if (diary == null) {
+			if (JOptionPane.showConfirmDialog(this, "해당 날짜에 작성된 일기가 없습니다. 새로 작성하시겠습니까?", "미작성 안내", 0) == 0)
+				new DiaryFormDialog(this, diaryDAO, currentUser, dStr, null).setVisible(true);
+		} else new DiaryFormDialog(this, diaryDAO, currentUser, dStr, diary).setVisible(true);
+	} // openDiaryDetailOrForm 끝
+
+	public static class SmartCellRenderer extends JTextArea implements TableCellRenderer {
+		public SmartCellRenderer() {
+			setLineWrap(true);
+			setWrapStyleWord(true);
+			setOpaque(true);
+			setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
+		} // public SmartCellRenderer() 끝
+
+		@Override
+		public Component getTableCellRendererComponent(JTable t, Object v, boolean s, boolean h, int r, int c) {
+			setFont(t.getFont());
+			setText(v != null ? v.toString() : "");
+			setBackground(s ? t.getSelectionBackground() : t.getBackground());
+			setForeground(s ? t.getSelectionForeground() : t.getForeground());
+			return this;
+		} // getTableCellRendererComponent override 끝
+	} // SmartCellRenderer 끝
+
+	public static class ButtonCellEditorRenderer extends AbstractCellEditor
+			implements TableCellRenderer, TableCellEditor {
+		private final JButton btn;
+		private final String lbl;
+		private final boolean isEdit;
+		private final DiaryMain mf;
+		private int cRow;
+
+		public ButtonCellEditorRenderer(String l, boolean ie, DiaryMain m) {
+			lbl = l;
+			isEdit = ie;
+			mf = m;
+			btn = new JButton(l);
+			btn.setOpaque(true);
+			btn.setFont(FONT_SMALL);
+
+			btn.addActionListener(e -> {
+				int targetRow = cRow; // 클릭한 행 번호 안전하게 고정
+				fireEditingStopped(); // 편집 종료
+
+				// 유효하지 않은 행이거나 데이터가 없는 빈 칸("-")이면 무시
+				if (targetRow < 0 || targetRow >= mf.doneModel.getRowCount())
+					return;
+				Object idObj = mf.doneModel.getValueAt(targetRow, 4);
+				if (idObj instanceof String && "-".equals(idObj))
+					return;
+
+				if (!isEdit && JOptionPane.showConfirmDialog(mf, "선택하신 Done 항목을 목록에서 삭제하시겠습니까?", "항목 삭제", 0) == 0) {
+
+					int doneId = -1;
+
+					// 💡 [핵심] 4번 칸의 ID가 숫자든 문자열이든 무조건 추출해 냅니다.
+					if (idObj instanceof Integer) {
+						doneId = (Integer) idObj;
+					} else if (idObj != null) {
+						try {
+							doneId = Integer.parseInt(idObj.toString().trim());
+						} catch (NumberFormatException ex) {
+							System.out.println("🚨 변환 실패 - 잘못된 ID 값: " + idObj);
+						}
+					} // try-catch 끝
+
+					// 추출한 ID가 정상적이면 무조건 DB에서 지워버립니다.
+					if (doneId != -1) {
+						mf.diaryDAO.deleteDone(doneId);
+					} // if문 1-1 끝
+
+					// 💡 화면만 어설프게 지우는 게 아니라, DB에서 최신 상태를 완전히 새로 불러와서 덮어씌웁니다.
+					mf.loadDoneListFromDB();
+					mf.refreshCalendar();
+				} // if문 1 끝
+			}); // btn.addActionListener 끝
+		} // public ButtonCellEditorRenderer 끝
+
+		@Override
+		public Component getTableCellRendererComponent(JTable t, Object v, boolean s, boolean h, int r, int c) {
+			return btn;
+		}
+
+		@Override
+		public Component getTableCellEditorComponent(JTable t, Object v, boolean s, int r, int c) {
+			cRow = r;
+			return btn;
+		}
+
+		@Override
+		public Object getCellEditorValue() {
+			return lbl;
+		}
+	} // ButtonCellEditorRenderer 끝
+
+	public static class DiaryListDialog extends JDialog {
+		public DiaryListDialog(DiaryMain p, DiaryDAO dao, UserVO u) {
+			super(p, "전체 일기 모아보기 (일기내용 포함)", true);
+			setSize(950, 600);
+			setLocationRelativeTo(p);
+			setLayout(new BorderLayout());
+			DefaultTableModel tm = new DefaultTableModel(new String[] { "번호", "날짜", "제목", "기분 배지", "최종 수정시각", "일기내용" },
+					0) {
+				@Override
+				public boolean isCellEditable(int r, int c) {
+					return false;
+				}
+			};
+			JTable t = new JTable(tm);
+			t.setFont(FONT_MAIN);
+			t.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+			t.getTableHeader().setReorderingAllowed(false);
+			t.getTableHeader().setBackground(COLOR_BG_LIGHT);
+			t.getTableHeader().setFont(FONT_BOLD);
+			SmartCellRenderer cr = new SmartCellRenderer() {
+				@Override
+				public Component getTableCellRendererComponent(JTable jt, Object v, boolean s, boolean h, int r,
+						int c) {
+					super.getTableCellRendererComponent(jt, v, s, h, r, c);
+					setSize(new Dimension(jt.getColumnModel().getColumn(c).getWidth(), 1000));
+					int ph = getPreferredSize().height + 12;
+					if (jt.getRowHeight(r) != ph)
+						jt.setRowHeight(r, Math.max(50, ph));
+					return this;
+				}
+			};
+			int[] w = { 45, 95, 120, 85, 130, 435 };
+			for (int i = 0; i < 6; i++) {
+				t.getColumnModel().getColumn(i).setPreferredWidth(w[i]);
+				t.getColumnModel().getColumn(i).setCellRenderer(cr);
+			}
+			List<DiaryVO> list = dao.getDiaryList(u.getUserId());
+			if (list != null) {
+				list.sort(Comparator.comparing(DiaryVO::getDiaryDate));
+				int rn = 1;
+				for (DiaryVO d : list)
+					tm.addRow(new Object[] { rn++, d.getDiaryDate(), d.getTitle(),
+							(d.getMoodId() >= 1 && d.getMoodId() < MOOD_ITEMS.length) ? MOOD_ITEMS[d.getMoodId()]
+									: MOOD_ITEMS[0],
+							d.getUpdatedAt() != null ? d.getUpdatedAt().replace(" ", "\n") : "", d.getContent() });
+			}
+			t.addMouseListener(new MouseAdapter() {
+				@Override
+				public void mouseClicked(MouseEvent e) {
+					if (e.getClickCount() == 2 && t.getSelectedRow() != -1) {
+						dispose();
+						p.openDiaryDetailOrForm((String) t.getValueAt(t.getSelectedRow(), 1));
+					}
+				}
+			});
+			add(new JScrollPane(t), BorderLayout.CENTER);
+			JPanel sp = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+			sp.setBackground(Color.WHITE);
+			JButton cb = new JButton("닫기");
+			cb.addActionListener(e -> dispose());
+			sp.add(cb);
+			add(sp, BorderLayout.SOUTH);
+		} // public DiaryListDialog 끝
+	} // public static class DiaryListDialog 끝
+
+	public static class LoginFrame extends JFrame {
+		private final JTextField idF = new JTextField(), pinF = new JTextField();
+		private final JPasswordField pwF = new JPasswordField();
+		private final JButton loginB = new JButton("로그인"), regB = new JButton("회원가입");
+		private final DiaryDAO dao = new DiaryDAOImple();
+
+		public LoginFrame() {
+			setTitle("My Memory & Done Log (2026)");
+			setSize(460, 420);
+			setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+			setLocationRelativeTo(null);
+			JPanel mp = new JPanel(new GridBagLayout());
+			mp.setBackground(new Color(240, 242, 245));
+			mp.setBorder(BorderFactory.createEmptyBorder(20, 30, 20, 30));
+			GridBagConstraints g = new GridBagConstraints();
+			g.insets = new Insets(8, 8, 8, 8);
+			g.fill = GridBagConstraints.HORIZONTAL;
+			g.gridx = 0;
+			g.gridy = 0;
+			g.weightx = 0.25;
+			mp.add(new JLabel("아이디 (ID) :"), g);
+			idF.setPreferredSize(new Dimension(180, 28));
+			g.gridx = 1;
+			g.weightx = 0.75;
+			mp.add(idF, g);
+			g.gridx = 0;
+			g.gridy = 1;
+			g.weightx = 0.25;
+			mp.add(new JLabel("비밀번호 (PW) :"), g);
+			pwF.setPreferredSize(new Dimension(180, 28));
+			g.gridx = 1;
+			g.weightx = 0.75;
+			mp.add(pwF, g);
+			g.gridx = 0;
+			g.gridy = 2;
+			g.weightx = 0.25;
+			mp.add(new JLabel("개인숫자 (4자리) :"), g);
+			JPanel pc = new JPanel(new BorderLayout(5, 0));
+			pc.setOpaque(false);
+			pinF.setPreferredSize(new Dimension(70, 28));
+			JLabel pn = new JLabel("회원 가입 시에만 입력해 주세요");
+			pn.setFont(new Font(null, 0, 12));
+			pn.setForeground(Color.GRAY);
+			pc.add(pinF, BorderLayout.CENTER);
+			pc.add(pn, BorderLayout.EAST);
+			g.gridx = 1;
+			g.weightx = 0.75;
+			mp.add(pc, g);
+			JLabel cn = new JLabel(
+					"<html><b><font color='red'>※ 개인숫자는 ID/PW 찾기에 필요합니다. 반드시 기억해 주세요.</font></b></html>");
+			cn.setFont(new Font(null, 0, 11));
+			g.gridx = 0;
+			g.gridy = 3;
+			g.gridwidth = 2;
+			g.insets = new Insets(5, 8, 10, 8);
+			mp.add(cn, g);
+			JPanel bp = new JPanel(new GridLayout(1, 2, 15, 0));
+			bp.setOpaque(false);
+			loginB.setBackground(COLOR_PRIMARY);
+			loginB.setForeground(Color.WHITE);
+			regB.setBackground(Color.WHITE);
+			regB.setForeground(COLOR_PRIMARY);
+			regB.setBorder(BorderFactory.createLineBorder(COLOR_PRIMARY, 1));
+			bp.add(loginB);
+			bp.add(regB);
+			g.gridy = 4;
+			g.weightx = 1.0;
+			g.insets = new Insets(10, 8, 8, 8);
+			mp.add(bp, g);
+			JLabel fa = new JLabel("아이디 / 비밀번호를 잊으셨나요?", JLabel.CENTER);
+			fa.setFont(FONT_SMALL);
+			fa.setForeground(Color.GRAY);
+			fa.setCursor(Cursor.getPredefinedCursor(12));
+			g.gridy = 5;
+			g.insets = new Insets(15, 8, 5, 8);
+			mp.add(fa, g);
+			add(mp);
+			fa.addMouseListener(new MouseAdapter() {
+				@Override
+				public void mouseClicked(MouseEvent e) {
+					new FindAccountDialog(LoginFrame.this, dao).setVisible(true);
+				} // mouseClicked 끝
+			}); // fa.addMouseListener 끝
+
+			ActionListener al = e -> {
+				String u = idF.getText().trim(), p = new String(pwF.getPassword()).trim(),
+						pnStr = pinF.getText().trim();
+				if (e.getSource() == loginB) {
+					if (u.isEmpty() || p.isEmpty()) {
+						JOptionPane.showMessageDialog(this, "아이디와 비밀번호를 모두 입력해 주세요.", "경고", 2);
+						return;
+					} // if문 1 끝
+					UserVO uv = dao.loginUser(u, p);
+					if (uv != null) {
+						JOptionPane.showMessageDialog(this, u + "님 환영합니다!");
+						new DiaryMain(uv).setVisible(true);
+						dispose();
+					} else
+						JOptionPane.showMessageDialog(this, "아이디 또는 비밀번호가 일치하지 않습니다.", "오류", 0);
+				} else if (e.getSource() == regB) {
+					if (u.isEmpty() || p.isEmpty() || pnStr.isEmpty()) {
+						JOptionPane.showMessageDialog(this, "가입을 위해 아이디, 비밀번호, 개인숫자(4자리)를 모두 입력해 주세요.", "경고", 2);
+						return;
+					} // if-else if문 끝
+					if (!pnStr.matches("[0-9]{4}")) {
+						JOptionPane.showMessageDialog(this, "개인숫자는 반드시 숫자 4자리 형식으로 구성해야 합니다.", "입력 오류", 0);
+						return;
+					} // if문 2 끝
+					try {
+						if (dao.getUserById(u) != null) {
+							JOptionPane.showMessageDialog(this, "이미 존재하는 ID이거나 가입에 실패했습니다.", "가입 실패", 2);
+							return;
+						} // if문 3 끝
+					} catch (Exception ex) {
+					} // try-catch 1 끝
+					
+					UserVO vo = new UserVO();
+					vo.setUsername(u);
+					vo.setPassword(p);
+					vo.setPin(pnStr);
+					
+					try {
+						if (dao.registerUser(vo) == 1) {
+							JOptionPane.showMessageDialog(this, "회원가입이 완료되었습니다! 로그인해 주세요.");
+							idF.setText("");
+							pwF.setText("");
+							pinF.setText("");
+						} else
+							JOptionPane.showMessageDialog(this, "이미 존재하는 ID이거나 가입에 실패했습니다.", "가입 실패", 2);
+					} catch (Exception ex) {
+						JOptionPane.showMessageDialog(this, "이미 존재하는 ID이거나 가입에 실패했습니다.", "가입 실패", 2);
+					} // try-catch 2 끝
+				} // else if문 끝
+			}; // ActionListener al = e 끝
+			loginB.addActionListener(al);
+			regB.addActionListener(al);
+		} // public LoginFrame() 끝
+	} // public static class LoginFrame 끝
+
+	public void refreshDoneListUI() {
+		// 1. DB에서 해당 유저의 Done 리스트를 통째로 가져옴
+		List<DoneVO> list = diaryDAO.getDoneList(currentUser.getUserId());
+
+		// 2. 화면의 테이블 모델(doneModel)을 깨끗이 비움
+		doneModel.setRowCount(0);
+
+		// 3. 가져온 데이터를 테이블에 한 줄씩 다시 추가
+		// 이 코드가 2군데(loadDoneListFromDB, refreshDoneListUI) 모두 동일해야 합니다.
+		for (DoneVO vo : list) {
+			doneModel.addRow(new Object[] { vo.isDone(), // 0번 칸: 완료 여부 (체크박스)
+					vo.getDoneDate(), // 1번 칸: 날짜
+					vo.getContent(), // 2번 칸: 할 일 내용
+					"삭제", // 3번 칸: 삭제 버튼
+					vo.getDoneId() // 4번 칸 (숨겨짐): DB 고유 ID ★이게 무조건 맨 끝에 와야 함!
+				}); // doneModel.addRow 끝
+			} // for문 끝
+		}; // refreshDoneListUI() 끝
+
+			 public static class DiaryFormDialog extends JDialog {
+				 private final DiaryDAO dao;
+				 private final UserVO usr;
+				 private final String dDate;
+				 private final DiaryVO exDiary;
+				 private final DiaryMain par;
+				 private final JTextField tF = new JTextField(), dnF = new JTextField();
+				 private final JTextArea cA = new JTextArea();
+				 private final JComboBox<String> mCb = new JComboBox<>(MOOD_ITEMS);
+				 private final JLabel upL = new JLabel("최종 수정 시각: 작성 전", JLabel.LEFT);
+				 private final JTable fdT;
+				 private final DefaultTableModel fdM;
+				 
+				 public DiaryFormDialog(DiaryMain p, DiaryDAO d, UserVO u, String dt, DiaryVO ed) {
+					 super(p, "일기 작성 및 수정 (" + dt + ")", true);
+					 par = p;
+					 dao = d;
+					 usr = u;
+					 dDate = dt;
+					 exDiary = ed;
+					 setSize(550, 650);
+					 setLocationRelativeTo(p);
+					 setLayout(new BorderLayout(10, 10));
+					 
+					 // [디버깅 코드] 생성 직후 ID 확인
+					 System.out.println("디버깅: Dialog 생성 시 전달받은 UserID = " + this.usr.getUserId());
+					 JPanel tp = new JPanel(new GridLayout(3, 1, 5, 5));
+					 tp.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
+					 tp.add(new JLabel("제목:"));
+					 tp.add(tF);
+					 tp.add(mCb);
+					 JPanel cp = new JPanel(new BorderLayout(10, 10));
+					 cA.setLineWrap(true);
+					 JScrollPane cS = new JScrollPane(cA);
+					 cS.setBorder(BorderFactory.createTitledBorder("일기 본문 내용"));
+					 cp.add(cS, BorderLayout.CENTER);
+					 JPanel dP = new JPanel(new BorderLayout(5, 5));
+					 dP.setBorder(BorderFactory.createTitledBorder("이 날의 Done-list 설정"));
+					 dP.setPreferredSize(new Dimension(0, 200));
+					 JPanel diP = new JPanel(new BorderLayout(5, 5));
+					 JButton dAb = new JButton("추가");
+					 diP.add(new JLabel("한 일: "), BorderLayout.WEST);
+					 diP.add(dnF, BorderLayout.CENTER);
+					 diP.add(dAb, BorderLayout.EAST);
+					 
+					 // [1] fdM 테이블 모델 수정 (2번 열인 '오늘 한 일' 편집 허용)
+					 fdM = new DefaultTableModel(new String[] { "완료", "작성 날짜", "오늘 한 일" }, 0) {
+						 @Override
+						 public Class<?> getColumnClass(int c) {
+							 return c == 0 ? Boolean.class : String.class;
+						 } // Class<?> getColumnClass 끝
+						 
+						 @Override
+						 public boolean isCellEditable(int r, int c) {
+							 // 💡 기존 return c == 0; 에서 변경
+							 return c == 0 || c == 2;
+						 } // isCellEditable 끝
+					 }; // fdM = new DefaultTableModel 끝
+					 
+					 // ... 기존 컬럼 너비 렌더러 등 설정 코드 유지 ...
+					 
+					 // [2] 입력창 패널(diP) 구성 시 안내 문구 덧붙이기
+					 dP.setBorder(BorderFactory.createTitledBorder("이 날의 Done-list 설정"));
+					 dP.setPreferredSize(new Dimension(0, 200));
+					 
+					 // 💡 팝업창용 안내 문구 생성
+					 JLabel popupGuide = new JLabel("💡 팁: 목록의 '오늘 한 일'을 더블클릭하여 바로 텍스트를 수정할 수 있습니다.");
+					 popupGuide.setFont(new Font(null, 0, 11));
+					 popupGuide.setForeground(Color.GRAY);
+					 popupGuide.setBorder(BorderFactory.createEmptyBorder(0, 0, 5, 0));
+					 
+					 diP.add(popupGuide, BorderLayout.NORTH); // 위쪽에 안내 문구 배치
+					 diP.add(new JLabel("한 일: "), BorderLayout.WEST);
+					 diP.add(dnF, BorderLayout.CENTER);
+					 diP.add(dAb, BorderLayout.EAST);
+					 
+					 fdT = new JTable(fdM);
+					 fdT.getColumnModel().getColumn(0).setPreferredWidth(45);
+					 fdT.getColumnModel().getColumn(1).setPreferredWidth(90);
+					 fdT.getColumnModel().getColumn(2).setPreferredWidth(215);
+					 TableCellRenderer fdr = (t, v, s, h, r, c) -> {
+						 JLabel l = new JLabel();
+						 l.setFont(t.getFont());
+						 l.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 6));
+						 Boolean id = (Boolean) t.getValueAt(r, 0);
+						 String tx = v != null ? v.toString() : "";
+						 l.setText((id != null && id) ? "<html><s><font color='gray'>" + tx + "</font></s></html>" : tx);
+						 if (s) {
+							 l.setBackground(t.getSelectionBackground());
+							 l.setOpaque(true);
+						 }
+						 return l;
+					 }; // TableCellRenderer fdr 끝
+					 fdT.getColumnModel().getColumn(1).setCellRenderer(fdr);
+					 fdT.getColumnModel().getColumn(2).setCellRenderer(fdr);
+					 fdM.addTableModelListener(ev -> {
+						 fdT.repaint();
+						 if (ev.getColumn() == 0 && par != null)
+							 par.refreshCalendar();
+					 }); // fdM.addTableModelListener 끝
+					 
+					 if (par.getDoneModel() != null && par.getDoneModel().getRowCount() > 0
+							 && !"-".equals(par.getDoneModel().getValueAt(0, 1)))
+						 for (int i = 0; i < par.getDoneModel().getRowCount(); i++)
+							 if (dDate.equals(par.getDoneModel().getValueAt(i, 1)))
+								 fdM.addRow(new Object[] { par.getDoneModel().getValueAt(i, 0),
+										 par.getDoneModel().getValueAt(i, 1), par.getDoneModel().getValueAt(i, 2) });
+					 
+					 JButton dDb = new JButton("선택한 Done 삭제");
+					 dP.add(diP, BorderLayout.NORTH);
+					 dP.add(new JScrollPane(fdT), BorderLayout.CENTER);
+					 dP.add(dDb, BorderLayout.SOUTH);
+					 cp.add(dP, BorderLayout.SOUTH);
+					 add(tp, BorderLayout.NORTH);
+					 add(cp, BorderLayout.CENTER);
+					 JPanel bp = new JPanel(new BorderLayout());
+					 bp.setBorder(BorderFactory.createEmptyBorder(0, 12, 10, 12));
+					 bp.add(upL, BorderLayout.WEST);
+					 JPanel btnP = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+					 JButton sB = new JButton("저장"), delB = new JButton("삭제");
+					 btnP.add(sB);
+					 btnP.add(delB);
+					 bp.add(btnP, BorderLayout.EAST);
+					 add(bp, BorderLayout.SOUTH);
+					 
+					 if (ed != null) {
+						 tF.setText(ed.getTitle());
+						 cA.setText(ed.getContent());
+						 mCb.setSelectedIndex(
+								 (ed.getMoodId() >= 1 && ed.getMoodId() < MOOD_ITEMS.length) ? ed.getMoodId() : 0);
+						 if (ed.getUpdatedAt() != null)
+							 upL.setText("최종 변경 시각: " + ed.getUpdatedAt());
+						 delB.setEnabled(true);
+					 } // if문 끝
+					 // 최종 변경 시각
+					 else {
+						 mCb.setSelectedIndex(0);
+						 delB.setEnabled(false);
+					 } // else문 끝
+					 
+					 
+					 // Q. 왜 delete를 누르면 일기와 동시에 done-list도 사라지는가?
+					 delB.addActionListener(e -> {
+						 if (ed != null && JOptionPane.showConfirmDialog(this,
+								 "정말 이 날짜의 일기를 삭제하시겠습니까?\n(해당 날짜의 Done 리스트도 함께 제거됩니다)", "일기 삭제 확인", 0, 2) == 0) {
+							 
+							 dao.deleteDiary(ed.getDiaryId());
+							 // 💡 [추가] DB에서도 해당 날짜의 Done-list를 완전히 삭제하도록 지시합니다.
+							 dao.deleteDoneByDate(dDate, usr.getUserId());
+							 
+							 DefaultTableModel mm = par.getDoneModel();
+							 List<Object[]> rr = new ArrayList<>();
+							 for (int i = 0; i < mm.getRowCount(); i++)
+								 if (!dDate.equals(mm.getValueAt(i, 1)) && !"-".equals(mm.getValueAt(i, 1)))
+									 rr.add(new Object[] { mm.getValueAt(i, 0), mm.getValueAt(i, 1), mm.getValueAt(i, 2),
+											 "삭제", mm.getValueAt(i, 4) });
+							 
+							 rr.sort((r1, r2) -> ((String) r1[1]).compareTo((String) r2[1]));
+							 mm.setRowCount(0);
+							 for (Object[] rw : rr)
+								 mm.addRow(rw);
+							 
+							 par.refreshCalendar();
+							 par.refreshDiaryList();
+							 par.refreshDoneList();
+							 JOptionPane.showMessageDialog(null, "일기가 정상적으로 삭제되었습니다.");
+							 dispose();
+						 } // if문 끝
+					 }); // delB.addActionListener 끝
+					 
+					 dAb.addActionListener(e -> {
+						    String t = dnF.getText().trim();
+						    if (t.isEmpty()) {
+						        JOptionPane.showMessageDialog(this, "추가할 한 일 내용을 입력하세요.");
+						        return;
+						    } // if문 끝
+						    
+						    // 1. 중복 검사만 수행
+						    for (int i = 0; i < fdM.getRowCount(); i++) {
+						        if (dDate.equals(fdM.getValueAt(i, 1)) && t.equals(fdM.getValueAt(i, 2))) {
+						            JOptionPane.showMessageDialog(this, "[" + dDate + "] 날짜에 동일한 항목이 존재합니다.", "중복 입력 경고", 2);
+						            return; // 중복이 발견되면 여기서 곧바로 실행 중단!
+						        } // if문 끝
+						    } // for문 끝
+						    
+						    // 2. 반복문을 무사히 통과했다면 (중복이 없다면) 항목 추가
+						    fdM.addRow(new Object[] { false, dDate, t });
+						    dnF.setText("");
+						}); // dAb.addActionListener 끝
+					 
+					 dDb.addActionListener(e -> {
+						 int sr = fdT.getSelectedRow();
+						 if (sr == -1)
+							 JOptionPane.showMessageDialog(this, "삭제할 Done-list 행을 선택해주세요.");
+						 else
+							 fdM.removeRow(sr);
+					 }); // dDb.addActionListener 끝
+					 
+					 sB.addActionListener(e -> {
+						 System.out.println("디버깅 - 현재 저장하려는 유저 ID: " + usr.getUserId());
+						 String t = tF.getText().trim(), c = cA.getText().trim(), rt = dnF.getText().trim();
+						 dao.deleteDoneByDate(dDate, usr.getUserId());
+						 
+						 if (t.isEmpty() || c.isEmpty()) {
+							 JOptionPane.showMessageDialog(this, "일기 제목과 본문을 모두 입력해 주세요.", "입력 오류", 2);
+							 return;
+						 } // if문 끝
+						 if (!rt.isEmpty() && JOptionPane.showConfirmDialog(this, "저장하지 않은 done-list는 사라집니다, 괜찮으시겠습니까?",
+								 "Done-list 추가 누락 안내", 0, 2) != 0)
+							 return;
+						 int mi = mCb.getSelectedIndex();
+						 if (ed == null) {
+							 DiaryVO nd = new DiaryVO();
+							 nd.setUserId(usr.getUserId());
+							 nd.setUserName(usr.getUsername());
+							 nd.setTitle(t);
+							 nd.setContent(c);
+							 nd.setDiaryDate(dDate);
+							 nd.setMoodId(mi);
+							 dao.insertDiary(nd);
+						 } else {
+							 exDiary.setTitle(t);
+							 exDiary.setContent(c);
+							 exDiary.setMoodId(mi);
+							 // 여기서 현재 시간을 생성하여 exDiary에 넣어주어야 합니다.
+							 String now = java.time.LocalDateTime.now()
+									 .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+							 exDiary.setUpdatedAt(now);
+							 dao.updateDiary(exDiary); // 이제 DAO가 이 객체를 저장할 때 시간도 포함합니다.
+							 System.out.println(now);
+						 } // if-else문 끝
+						 DefaultTableModel mm = par.getDoneModel();
+						 List<Object[]> sr = new ArrayList<>();
+						 for (int i = 0; i < mm.getRowCount(); i++)
+							 if (!dDate.equals(mm.getValueAt(i, 1)) && !"-".equals(mm.getValueAt(i, 1)))
+								 sr.add(new Object[] { mm.getValueAt(i, 0), mm.getValueAt(i, 1), mm.getValueAt(i, 2), "수정",
+								 "삭제" });
+						 
+						 for (int i = 0; i < fdM.getRowCount(); i++) {
+							 DoneVO vo = new DoneVO();
+							 vo.setUserId(usr.getUserId());
+							 vo.setDoneDate((String) fdM.getValueAt(i, 1));
+							 vo.setContent((String) fdM.getValueAt(i, 2));
+							 vo.setDone((Boolean) fdM.getValueAt(i, 0));
+							 dao.insertDone(vo);
+						 } // for문 끝
+						 
+						 sr.sort((r1, r2) -> ((String) r1[1]).compareTo((String) r2[1]));
+						 mm.setRowCount(0);
+						 for (Object[] rw : sr)
+							 mm.addRow(rw);
+						 par.loadDoneListFromDB();
+						 par.refreshDoneListUI();
+						 par.refreshCalendar();
+						 par.refreshDiaryList();
+						 dispose();
+					 }); // sB.addActionListener 끝
+		}; // public DiaryFormDialog 끝
+	} // public static class DiaryFormDialog 끝
+	public static void main(String[] args) {
+		SwingUtilities.invokeLater(() -> new LoginFrame().setVisible(true));
+	} // main 끝
+}// DiaryMain 끝
